@@ -1,0 +1,79 @@
+# letsencrypt-prod.yaml — cert-manager ClusterIssuer
+#
+# Issues TLS certificates from Let's Encrypt using the DNS-01 ACME
+# challenge via AWS Route53. This allows wildcard certificates and
+# works even when the cluster is not publicly reachable (private EKS).
+#
+# Prerequisites:
+#   1. cert-manager is installed (apps/cert-manager.yaml synced)
+#   2. IRSA role for cert-manager has Route53 ChangeResourceRecordSets permission
+#   3. Your domain is hosted in Route53
+#
+# Apply manually after cert-manager is ready:
+#   kubectl apply -f manifests/cluster-issuer/letsencrypt-prod.yaml
+#
+# Or let ArgoCD manage it — add this to /apps as a separate Application.
+#
+# Verify issuance:
+#   kubectl get clusterissuer letsencrypt-prod -o wide
+#   kubectl get certificate -A
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: letsencrypt-prod
+    app.kubernetes.io/part-of: cert-manager
+spec:
+  acme:
+    # Let's Encrypt production endpoint
+    # Use staging for testing: https://acme-staging-v02.api.letsencrypt.org/directory
+    server: https://acme-v02.api.letsencrypt.org/directory
+
+    # Email for expiry notifications and account registration
+    email: platform-team@yourdomain.com
+
+    # Store ACME account private key in this secret
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+
+    solvers:
+      # ---------------------------------------------------------------- #
+      # DNS-01 solver via Route53                                        #
+      # Cert-manager uses IRSA to call Route53 ChangeResourceRecordSets  #
+      # ---------------------------------------------------------------- #
+      - dns01:
+          route53:
+            region: <REGION>
+            # hostedZoneID is optional but speeds up validation
+            # hostedZoneID: ZXXXXXXXXXXXXX
+            # IRSA is used automatically — no accessKeyID/secretAccessKey needed
+        selector:
+          # This solver handles all domains under yourdomain.com
+          dnsZones:
+            - yourdomain.com
+
+---
+# Staging issuer — use this for testing to avoid Let's Encrypt rate limits
+# Certificates from staging are NOT trusted by browsers.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app.kubernetes.io/name: letsencrypt-staging
+    app.kubernetes.io/part-of: cert-manager
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: platform-team@yourdomain.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - dns01:
+          route53:
+            region: <REGION>
+        selector:
+          dnsZones:
+            - yourdomain.com

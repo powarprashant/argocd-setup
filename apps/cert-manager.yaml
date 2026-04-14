@@ -1,0 +1,123 @@
+# cert-manager.yaml — TLS Certificate Management
+#
+# cert-manager automates the issuance and renewal of TLS certificates
+# from Let's Encrypt (or ACM via Route53 DNS solver).
+#
+# Sync wave -3: must be installed FIRST so its CRDs exist before
+# any ClusterIssuer or Certificate resources are applied.
+#
+# What it manages:
+#   - Automatic TLS for all Ingress resources (via ingress annotation)
+#   - Let's Encrypt ACME DNS-01 challenge via Route53
+#   - Wildcard certificates (*.yourdomain.com)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: platform
+    layer: infrastructure
+  annotations:
+    # Install before everything else
+    argocd.argoproj.io/sync-wave: "-3"
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-critical
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.14.5
+    helm:
+      releaseName: cert-manager
+      values: |
+        # Install CRDs as part of the Helm release
+        # (alternative: kubectl apply -f https://...crds.yaml)
+        installCRDs: true
+
+        # IRSA: cert-manager needs Route53 access for DNS-01 challenge
+        serviceAccount:
+          annotations:
+            eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/cert-manager-irsa-<CLUSTER_NAME>
+
+        # Prometheus metrics
+        prometheus:
+          enabled: true
+          servicemonitor:
+            enabled: true
+            namespace: monitoring
+
+        # Resource limits for production
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+        webhook:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+        cainjector:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+        # Pod topology spread for HA
+        replicaCount: 2
+        podDisruptionBudget:
+          enabled: true
+          minAvailable: 1
+
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true          # Required for CRD installation
+      - RespectIgnoreDifferences=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle

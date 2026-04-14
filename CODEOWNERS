@@ -1,0 +1,50 @@
+# CODEOWNERS — GitHub enforced review requirements
+#
+# Any PR touching these paths requires approval from the listed teams
+# before it can be merged. Combined with branch protection rules:
+#   - Require pull request reviews before merging
+#   - Require review from Code Owners
+#   - Dismiss stale pull request approvals when new commits are pushed
+#   - Require status checks to pass before merging
+
+# ------------------------------------------------------------------ #
+# Global fallback — platform team reviews everything by default      #
+# ------------------------------------------------------------------ #
+*                                   @<YOUR_ORG>/platform-admins
+
+# ------------------------------------------------------------------ #
+# Bootstrap — only senior platform engineers can change the root app #
+# A wrong change here breaks ALL applications                        #
+# ------------------------------------------------------------------ #
+/bootstrap/                         @<YOUR_ORG>/platform-admins
+
+# ------------------------------------------------------------------ #
+# Projects — RBAC changes need admin approval                        #
+# ------------------------------------------------------------------ #
+/projects/                          @<YOUR_ORG>/platform-admins
+
+# ------------------------------------------------------------------ #
+# RBAC — any role/policy change needs two admin approvals            #
+# ------------------------------------------------------------------ #
+/rbac/                              @<YOUR_ORG>/platform-admins
+
+# ------------------------------------------------------------------ #
+# ArgoCD values — Helm values control the ArgoCD server itself       #
+# ------------------------------------------------------------------ #
+/values/                            @<YOUR_ORG>/platform-admins
+
+# ------------------------------------------------------------------ #
+# Apps — devops team can merge, platform admin required for argocd-self #
+# ------------------------------------------------------------------ #
+/apps/                              @<YOUR_ORG>/devops-team
+/apps/argocd-self.yaml              @<YOUR_ORG>/platform-admins
+
+# ------------------------------------------------------------------ #
+# Notifications — devops team manages alert templates                #
+# ------------------------------------------------------------------ #
+/notifications/                     @<YOUR_ORG>/devops-team
+
+# ------------------------------------------------------------------ #
+# Manifests — any raw K8s manifest needs platform review             #
+# ------------------------------------------------------------------ #
+/manifests/                         @<YOUR_ORG>/platform-admins

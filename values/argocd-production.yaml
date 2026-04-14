@@ -1,0 +1,245 @@
+# argocd-production.yaml — ArgoCD Helm Values (Production)
+#
+# Used by apps/argocd-self.yaml via the multi-source pattern.
+# This file is the single source of truth for how ArgoCD is configured.
+#
+# To change any ArgoCD setting:
+#   1. Edit this file
+#   2. Open a PR (requires platform-admin approval per CODEOWNERS)
+#   3. Merge → ArgoCD self-syncs the change within the change window
+#
+# Reference: https://github.com/argoproj/argo-helm/blob/main/charts/argo-cd/values.yaml
+
+# ------------------------------------------------------------------ #
+# Global                                                             #
+# ------------------------------------------------------------------ #
+global:
+  image:
+    tag: v2.11.0    # Must match targetRevision chart's bundled version
+
+  # All ArgoCD pods log in JSON for CloudWatch/Loki parsing
+  logging:
+    format: json
+    level: info
+
+# ------------------------------------------------------------------ #
+# ArgoCD Server                                                      #
+# ------------------------------------------------------------------ #
+server:
+  replicas: 2    # HA: 2 server replicas behind the NLB/ALB
+
+  # TLS terminated at Ingress — server runs in insecure mode inside cluster
+  extraArgs:
+    - --insecure
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - argocd-server
+          topologyKey: kubernetes.io/hostname
+
+  # Prometheus metrics
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+      # gRPC support for ArgoCD CLI
+      nginx.ingress.kubernetes.io/grpc-backend: "true"
+    hosts:
+      - argocd.yourdomain.com
+    tls:
+      - secretName: argocd-server-tls
+        hosts:
+          - argocd.yourdomain.com
+
+# ------------------------------------------------------------------ #
+# Application Controller                                             #
+# ------------------------------------------------------------------ #
+controller:
+  replicas: 1    # StatefulSet — scale with sharding for large clusters
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+
+  # Tuning for production cluster size
+  extraArgs:
+    - --status-processors=20
+    - --operation-processors=10
+
+# ------------------------------------------------------------------ #
+# Repo Server                                                        #
+# ------------------------------------------------------------------ #
+repoServer:
+  replicas: 2
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - argocd-repo-server
+          topologyKey: kubernetes.io/hostname
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+
+  extraArgs:
+    - --parallelismlimit=10
+
+# ------------------------------------------------------------------ #
+# ApplicationSet Controller                                          #
+# ------------------------------------------------------------------ #
+applicationSet:
+  replicas: 2
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+
+# ------------------------------------------------------------------ #
+# Notifications Controller                                           #
+# ------------------------------------------------------------------ #
+notifications:
+  enabled: true
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+
+# ------------------------------------------------------------------ #
+# Redis HA (required for HA ArgoCD)                                 #
+# ------------------------------------------------------------------ #
+redis-ha:
+  enabled: true
+
+  haproxy:
+    enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+  redis:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+
+# ------------------------------------------------------------------ #
+# ConfigMaps — managed separately in /rbac and /notifications        #
+# These are set here to prevent Helm from overwriting them           #
+# ------------------------------------------------------------------ #
+configs:
+  cm:
+    # Git polling interval — webhook delivers changes faster anyway
+    timeout.reconciliation: 180s
+
+    # Disable anonymous access
+    users.anonymous.enabled: "false"
+
+    # Resource tracking via annotation (recommended)
+    application.instanceLabelKey: argocd.argoproj.io/app-name
+
+    # Concurrent syncs
+    application.sync.concurrency: "5"
+
+    # Ignore AWS-managed webhook CA bundles
+    resource.customizations.ignoreDifferences.admissionregistration.k8s.io_MutatingWebhookConfiguration: |
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+    resource.customizations.ignoreDifferences.admissionregistration.k8s.io_ValidatingWebhookConfiguration: |
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle
+
+  # RBAC is managed in rbac/argocd-rbac-cm.yaml
+  # It is applied separately and ignored here via ignoreDifferences in argocd-self.yaml
+  rbac:
+    policy.default: role:readonly
+    scopes: "[groups, email]"
+
+  # Repositories — credentials stored in argocd-secret (not here)
+  repositories:
+    argocd-setup:
+      url: https://github.com/<YOUR_ORG>/argocd-setup
+      name: argocd-setup

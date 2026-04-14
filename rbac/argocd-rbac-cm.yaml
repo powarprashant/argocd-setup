@@ -1,0 +1,76 @@
+# argocd-rbac-cm.yaml — ArgoCD RBAC Policy
+#
+# Applied directly to the cluster (not via Helm) so it is not
+# overwritten by argocd-self Helm upgrades.
+#
+# Apply manually on first install:
+#   kubectl apply -f rbac/argocd-rbac-cm.yaml
+#
+# After bootstrap, ArgoCD's selfHeal will maintain this ConfigMap.
+# Changes: edit here → PR → merge → ArgoCD applies automatically.
+#
+# Role hierarchy:
+#   role:admin       Full cluster-level access (platform-admins only)
+#   role:devops      Sync + manage all apps; no AppProject mutations
+#   role:developer   Sync non-prod; read-only on prod
+#   role:readonly    Read-only (default for all authenticated users)
+#
+# Groups come from your IdP (Okta/GitHub/Cognito) via OIDC.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-rbac-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # Default policy — authenticated users get read-only unless explicitly granted more
+  policy.default: role:readonly
+
+  policy.csv: |
+    # ================================================================ #
+    # ADMIN — platform-admins IdP group                               #
+    # Full access to everything: apps, repos, clusters, exec          #
+    # ================================================================ #
+    g, <YOUR_ORG>:platform-admins, role:admin
+
+    # ================================================================ #
+    # DEVOPS — devops-team IdP group                                  #
+    # Sync all apps, manage repos; cannot delete AppProjects          #
+    # ================================================================ #
+    p, role:devops, applications, get,    */*, allow
+    p, role:devops, applications, create, */*, allow
+    p, role:devops, applications, update, */*, allow
+    p, role:devops, applications, delete, */*, allow
+    p, role:devops, applications, sync,   */*, allow
+    p, role:devops, applications, action, */*, allow
+    p, role:devops, repositories, get,    *, allow
+    p, role:devops, repositories, create, *, allow
+    p, role:devops, repositories, update, *, allow
+    p, role:devops, clusters,     get,    *, allow
+    p, role:devops, logs,         get,    */*, allow
+    p, role:devops, exec,         create, */*, allow
+
+    g, <YOUR_ORG>:devops-team, role:devops
+
+    # ================================================================ #
+    # DEVELOPER — developers IdP group                                #
+    # Read-only on platform apps; can sync own app namespaces         #
+    # ================================================================ #
+    p, role:developer, applications, get,  */*, allow
+    p, role:developer, logs,         get,  */*, allow
+    p, role:developer, repositories, get,  *, allow
+
+    g, <YOUR_ORG>:developers, role:developer
+
+    # ================================================================ #
+    # READONLY — default for all authenticated users                  #
+    # Can see apps and their health, cannot change anything           #
+    # ================================================================ #
+    p, role:readonly, applications, get, */*, allow
+    p, role:readonly, repositories, get, *, allow
+    p, role:readonly, clusters,     get, *, allow
+
+  # Claim from OIDC token used for group membership
+  scopes: "[groups, email]"

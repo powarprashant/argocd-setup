@@ -1,0 +1,61 @@
+# root-application.yaml — App of Apps Entry Point
+#
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  Jenkins applies this file ONCE during initial cluster setup.   ║
+# ║  After that, ArgoCD self-manages everything from Git.           ║
+# ║  Never delete or modify this file without a change window.      ║
+# ╚══════════════════════════════════════════════════════════════════╝
+#
+# What this does:
+#   ArgoCD watches the /apps directory in this repo.
+#   Every *.yaml file found there is treated as an ArgoCD Application CR.
+#   Adding a new app = commit a new yaml to /apps. No kubectl needed.
+#
+# Jenkins bootstrap command (run once):
+#   kubectl apply -f bootstrap/root-application.yaml
+#
+# Dependency order (ArgoCD syncs in this order via sync-wave):
+#   Wave -3 : cert-manager        (CRDs must exist before ClusterIssuer)
+#   Wave -2 : ingress-nginx       (Ingress controller before any Ingress resources)
+#   Wave -1 : external-secrets    (ESO must exist before apps read secrets)
+#   Wave  0 : monitoring-stack    (Prometheus/Grafana)
+#   Wave  1 : argocd-self         (ArgoCD manages itself last)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-application
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: root-application
+    app.kubernetes.io/part-of: argocd-bootstrap
+    managed-by: platform-team
+  annotations:
+    # Notify immediately if the root app breaks
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-critical
+  # ⚠️  NO finalizer on the root app.
+  # Adding resources-finalizer here would cascade-delete EVERY application
+  # when this CR is deleted. Protect it via RBAC + branch protection instead.
+spec:
+  project: platform
+
+  source:
+    repoURL: https://github.com/<YOUR_ORG>/argocd-setup
+    targetRevision: main
+    path: apps
+    directory:
+      recurse: false      # /apps is flat — no subdirectory recursion needed
+      jsonnet: {}
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true         # Remove Application CRs deleted from /apps
+      selfHeal: true      # Re-create CRs manually deleted from the cluster
+      allowEmpty: false   # Never sync to an empty state
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - CreateNamespace=false   # argocd namespace already exists

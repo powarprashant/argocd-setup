@@ -1,0 +1,114 @@
+# argocd-self.yaml — ArgoCD Self-Management
+#
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  ArgoCD manages its OWN installation via this Application CR.   ║
+# ║  After bootstrapping, all ArgoCD config changes go through Git. ║
+# ║  No manual helm upgrade or kubectl apply for ArgoCD itself.     ║
+# ╚══════════════════════════════════════════════════════════════════╝
+#
+# Sync wave 1: installed LAST — after all dependencies are ready.
+#
+# How self-management works:
+#   1. Jenkins installs ArgoCD initially (helm install or kubectl apply)
+#   2. Jenkins applies bootstrap/root-application.yaml
+#   3. root-application discovers this file in /apps
+#   4. ArgoCD creates THIS Application CR
+#   5. From now on, ArgoCD reconciles its own Helm release
+#   6. To upgrade ArgoCD: bump targetRevision in this file → PR → merge
+#
+# Sync window: Tue-Thu 10-14 UTC (defined in platform-project.yaml)
+# Automated sync: selfHeal=true, prune=false (conservative for self-mgmt)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-self
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-self
+    app.kubernetes.io/part-of: platform
+    layer: gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    # Critical — any failure in self-management needs immediate attention
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-deployed.slack: platform-releases
+  # ⚠️  Keep the finalizer — prevents accidental deletion of the ArgoCD install
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-cd
+    # Pin to exact version. Upgrade by changing this value via PR.
+    targetRevision: 6.11.1   # ArgoCD v2.11.x
+    helm:
+      releaseName: argocd
+      # Values are in values/argocd-production.yaml (separate file for clarity)
+      valueFiles:
+        - $values/values/argocd-production.yaml
+
+  # Multi-source: chart from Helm repo + values from Git repo
+  sources:
+    - repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-cd
+      targetRevision: 6.11.1
+      helm:
+        releaseName: argocd
+        valueFiles:
+          - $values/values/argocd-production.yaml
+
+    - repoURL: https://github.com/<YOUR_ORG>/argocd-setup
+      targetRevision: main
+      ref: values   # Reference alias used above as $values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      # selfHeal: drift from Git is reverted (e.g., manual helm upgrade)
+      selfHeal: true
+      # prune: false — conservative for self-management.
+      # Pruning ArgoCD resources could delete the Application controller.
+      # Review diffs carefully before enabling.
+      prune: false
+      allowEmpty: false
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - RespectIgnoreDifferences=true
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+
+  ignoreDifferences:
+    # ArgoCD injects its own label into the server ConfigMap at runtime
+    - group: ""
+      kind: ConfigMap
+      name: argocd-cm
+      jsonPointers:
+        - /data/application.instanceLabelKey
+    # Secret is managed externally (OIDC config, repo creds)
+    - group: ""
+      kind: Secret
+      name: argocd-secret
+      jsonPointers:
+        - /data
+    # RBAC and notification ConfigMaps are in separate files in this repo
+    - group: ""
+      kind: ConfigMap
+      name: argocd-rbac-cm
+      jsonPointers:
+        - /data
+    - group: ""
+      kind: ConfigMap
+      name: argocd-notifications-cm
+      jsonPointers:
+        - /data

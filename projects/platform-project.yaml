@@ -1,0 +1,141 @@
+# platform-project.yaml — ArgoCD AppProject
+#
+# A single AppProject that acts as the RBAC boundary for all
+# platform infrastructure managed by this repo.
+#
+# Why one project instead of per-environment projects?
+#   This repo manages PLATFORM components (cert-manager, ingress,
+#   monitoring, ArgoCD itself) — not application environments.
+#   Platform components span namespaces by design.
+#   Application teams have their own repos and their own AppProjects.
+#
+# RBAC summary:
+#   platform-admins  → full access (sync, delete, exec)
+#   devops-team      → sync + manage, no project mutations
+#   developers       → read-only (visibility into platform health)
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    managed-by: platform-team
+spec:
+  description: "Platform infrastructure — cert-manager, ingress, monitoring, ArgoCD self-management"
+
+  # ------------------------------------------------------------------ #
+  # Source repositories                                                #
+  # Only explicitly named repos. No wildcards for platform components. #
+  # ------------------------------------------------------------------ #
+  sourceRepos:
+    - https://github.com/<YOUR_ORG>/argocd-setup
+    - https://charts.jetstack.io                           # cert-manager
+    - https://kubernetes.github.io/ingress-nginx           # ingress-nginx
+    - https://charts.external-secrets.io                   # external-secrets
+    - https://prometheus-community.github.io/helm-charts   # kube-prometheus-stack
+    - https://grafana.github.io/helm-charts                # loki, tempo
+    - https://argoproj.github.io/argo-helm                 # argocd self-managed
+
+  # ------------------------------------------------------------------ #
+  # Permitted destinations                                             #
+  # Platform components are allowed in specific system namespaces.    #
+  # ------------------------------------------------------------------ #
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    - server: https://kubernetes.default.svc
+      namespace: cert-manager
+    - server: https://kubernetes.default.svc
+      namespace: ingress-nginx
+    - server: https://kubernetes.default.svc
+      namespace: external-secrets
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+    - server: https://kubernetes.default.svc
+      namespace: logging
+
+  # ------------------------------------------------------------------ #
+  # Cluster-scoped resources — platform components need these         #
+  # ------------------------------------------------------------------ #
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition         # cert-manager, ESO CRDs
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    - group: cert-manager.io
+      kind: ClusterIssuer                    # Let's Encrypt issuer
+    - group: policy
+      kind: PodSecurityPolicy
+
+  # ------------------------------------------------------------------ #
+  # Sync windows                                                       #
+  # Platform components: allow all syncs (monitored by notifications) #
+  # ------------------------------------------------------------------ #
+  syncWindows:
+    - kind: allow
+      schedule: "* * * * *"
+      duration: 24h
+      applications:
+        - cert-manager
+        - ingress-nginx
+        - external-secrets
+        - monitoring-stack
+      manualSync: true
+    # ArgoCD self-managed: change window only (Tue-Thu 10-14 UTC)
+    - kind: allow
+      schedule: "0 10 * * 2-4"
+      duration: 4h
+      applications:
+        - argocd-self
+      manualSync: true
+      timeZone: "UTC"
+    - kind: deny
+      schedule: "0 0 * * *"
+      duration: 24h
+      applications:
+        - argocd-self
+      manualSync: false
+      timeZone: "UTC"
+
+  # ------------------------------------------------------------------ #
+  # Project-level RBAC roles                                          #
+  # ------------------------------------------------------------------ #
+  roles:
+    - name: platform-admin
+      description: Full access to all platform applications
+      policies:
+        - p, proj:platform:platform-admin, applications, *, platform/*, allow
+        - p, proj:platform:platform-admin, exec,         create, platform/*, allow
+        - p, proj:platform:platform-admin, logs,         get,    platform/*, allow
+      groups:
+        - <YOUR_ORG>:platform-admins
+
+    - name: devops-engineer
+      description: Sync and manage platform apps, no exec in argocd-self
+      policies:
+        - p, proj:platform:devops-engineer, applications, get,    platform/*, allow
+        - p, proj:platform:devops-engineer, applications, sync,   platform/*, allow
+        - p, proj:platform:devops-engineer, applications, update, platform/*, allow
+        - p, proj:platform:devops-engineer, logs,         get,    platform/*, allow
+        - p, proj:platform:devops-engineer, exec,         create, platform/argocd-self, deny
+      groups:
+        - <YOUR_ORG>:devops-team
+
+    - name: readonly
+      description: Read-only visibility for all engineers
+      policies:
+        - p, proj:platform:readonly, applications, get, platform/*, allow
+        - p, proj:platform:readonly, logs,         get, platform/*, allow
+      groups:
+        - <YOUR_ORG>:developers
+        - <YOUR_ORG>:qa-team
