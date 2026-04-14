@@ -1,0 +1,33 @@
+# App-of-Apps: staging-apps
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staging-apps
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: staging-apps
+    app.kubernetes.io/part-of: argocd-bootstrap
+    environment: staging
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: staging
+
+  source:
+    repoURL: https://github.com/<YOUR_ORG>/argocd-setup
+    targetRevision: main
+    path: applications/staging
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

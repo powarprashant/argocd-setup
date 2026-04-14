@@ -1,0 +1,95 @@
+# AppProject: dev
+#
+# Isolates development workloads.
+# Developers have sync rights; everyone else is read-only.
+# Source repos and destination namespaces are tightly scoped.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: dev
+  namespace: argocd
+  # Prevent accidental deletion of the project while applications exist
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    environment: dev
+    managed-by: argocd
+spec:
+  description: "Development environment — fast iteration, lower stability guarantees"
+
+  # ------------------------------------------------------------------ #
+  # Permitted source repositories                                       #
+  # ------------------------------------------------------------------ #
+  sourceRepos:
+    - "https://github.com/<YOUR_ORG>/argocd-setup"
+    - "https://github.com/<YOUR_ORG>/monitoring-stack"
+    - "https://github.com/<YOUR_ORG>/app-*"          # wildcard: any app repo
+    - "https://charts.helm.sh/stable"
+    - "https://prometheus-community.github.io/helm-charts"
+    - "https://grafana.github.io/helm-charts"
+
+  # ------------------------------------------------------------------ #
+  # Permitted destination clusters & namespaces                        #
+  # ------------------------------------------------------------------ #
+  destinations:
+    - server: https://kubernetes.default.svc   # in-cluster
+      namespace: "dev-*"                        # any namespace prefixed dev-
+    - server: https://kubernetes.default.svc
+      namespace: monitoring-dev
+    - server: https://kubernetes.default.svc
+      namespace: logging-dev
+
+  # ------------------------------------------------------------------ #
+  # Cluster-scoped resources allowed                                   #
+  # ------------------------------------------------------------------ #
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRole
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRoleBinding
+
+  # Deny creation of cluster-admin ClusterRoleBindings
+  clusterResourceBlacklist:
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRoleBinding
+
+  # ------------------------------------------------------------------ #
+  # Namespace-scoped resource restrictions                             #
+  # ------------------------------------------------------------------ #
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota   # managed centrally by platform team
+    - group: ""
+      kind: LimitRange      # managed centrally by platform team
+
+  # ------------------------------------------------------------------ #
+  # Sync windows — allow syncs at all times in dev                    #
+  # ------------------------------------------------------------------ #
+  syncWindows:
+    - kind: allow
+      schedule: "* * * * *"
+      duration: 24h
+      applications:
+        - "*"
+      manualSync: true
+
+  # ------------------------------------------------------------------ #
+  # RBAC roles within this project                                     #
+  # ------------------------------------------------------------------ #
+  roles:
+    - name: dev-admin
+      description: Full access to dev applications
+      policies:
+        - p, proj:dev:dev-admin, applications, *, dev/*, allow
+      groups:
+        - <YOUR_ORG>:devops-team
+        - <YOUR_ORG>:developers
+
+    - name: dev-readonly
+      description: Read-only access to dev applications
+      policies:
+        - p, proj:dev:dev-readonly, applications, get, dev/*, allow
+      groups:
+        - <YOUR_ORG>:all-engineers

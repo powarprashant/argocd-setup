@@ -1,0 +1,83 @@
+# ArgoCD Core ConfigMap
+# Controls global ArgoCD server behaviour.
+# Reference: https://argo-cd.readthedocs.io/en/stable/operator-manual/argocd-cm-yaml/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # ------------------------------------------------------------------ #
+  # Repository configuration                                            #
+  # ------------------------------------------------------------------ #
+  # Allow ArgoCD to track only explicitly listed repos (least-privilege)
+  repositories: |
+    - url: https://github.com/<YOUR_ORG>/argocd-setup
+      name: argocd-setup
+
+  # ------------------------------------------------------------------ #
+  # SSO / OIDC (production: replace port-forward with real SSO)        #
+  # ------------------------------------------------------------------ #
+  # Uncomment and populate once you have an OIDC provider (e.g. Okta,  #
+  # Dex, AWS Cognito).                                                  #
+  #
+  # url: https://argocd.example.com
+  # oidc.config: |
+  #   name: Okta
+  #   issuer: https://your-org.okta.com/oauth2/default
+  #   clientID: <CLIENT_ID>
+  #   clientSecret: $oidc.okta.clientSecret
+  #   requestedScopes: ["openid", "profile", "email", "groups"]
+  #   requestedIDTokenClaims:
+  #     groups:
+  #       essential: true
+
+  # ------------------------------------------------------------------ #
+  # Resource tracking (recommended: annotation)                        #
+  # ------------------------------------------------------------------ #
+  application.instanceLabelKey: argocd.argoproj.io/app-name
+
+  # ------------------------------------------------------------------ #
+  # Health check customisations                                        #
+  # ------------------------------------------------------------------ #
+  resource.customizations.health.argoproj.io_Application: |
+    hs = {}
+    hs.status = "Progressing"
+    hs.message = ""
+    if obj.status ~= nil then
+      if obj.status.health ~= nil then
+        hs.status = obj.status.health.status
+        if obj.status.health.message ~= nil then
+          hs.message = obj.status.health.message
+        end
+      end
+    end
+    return hs
+
+  # ------------------------------------------------------------------ #
+  # Diff customisations — ignore fields managed by AWS/EKS             #
+  # ------------------------------------------------------------------ #
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_MutatingWebhookConfiguration: |
+    jsonPointers:
+      - /webhooks/0/clientConfig/caBundle
+
+  resource.customizations.ignoreDifferences.admissionregistration.k8s.io_ValidatingWebhookConfiguration: |
+    jsonPointers:
+      - /webhooks/0/clientConfig/caBundle
+
+  # ------------------------------------------------------------------ #
+  # Sync / performance tuning                                          #
+  # ------------------------------------------------------------------ #
+  # How often ArgoCD polls Git (seconds). Prefer webhooks in production.
+  timeout.reconciliation: 180s
+
+  # Prevent runaway sync loops
+  application.sync.concurrency: "5"
+
+  # ------------------------------------------------------------------ #
+  # Disable anonymous access                                           #
+  # ------------------------------------------------------------------ #
+  users.anonymous.enabled: "false"

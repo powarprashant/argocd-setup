@@ -1,0 +1,103 @@
+# ArgoCD Notifications ConfigMap
+# Sends Slack / PagerDuty / email alerts on sync events and health changes.
+# Reference: https://argocd-notifications.readthedocs.io/en/stable/
+#
+# Secrets (tokens) must be stored in the argocd-notifications-secret Secret,
+# NOT hardcoded here.  Example secret structure:
+#
+#   kubectl create secret generic argocd-notifications-secret \
+#     --from-literal=slack-token=xoxb-... \
+#     -n argocd
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-notifications-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # ------------------------------------------------------------------ #
+  # Service definitions                                                #
+  # ------------------------------------------------------------------ #
+  service.slack: |
+    token: $slack-token
+    username: ArgoCD
+    icon: ":argo:"
+
+  # ------------------------------------------------------------------ #
+  # Templates                                                          #
+  # ------------------------------------------------------------------ #
+  template.app-deployed: |
+    message: |
+      :white_check_mark: Application *{{.app.metadata.name}}* is now running version `{{.app.status.sync.revision | truncate 7}}`.
+      *Environment:* {{index .app.metadata.labels "environment"}}
+    slack:
+      attachments: |
+        [{
+          "color": "#18be52",
+          "title": "{{ .app.metadata.name }}",
+          "title_link": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+          "fields": [{
+            "title": "Revision",
+            "value": "{{.app.status.sync.revision | truncate 7}}",
+            "short": true
+          }, {
+            "title": "Environment",
+            "value": "{{index .app.metadata.labels \"environment\"}}",
+            "short": true
+          }]
+        }]
+
+  template.app-sync-failed: |
+    message: |
+      :x: Application *{{.app.metadata.name}}* sync failed.
+      *Error:* {{.app.status.operationState.message}}
+    slack:
+      attachments: |
+        [{
+          "color": "#E96D76",
+          "title": "{{ .app.metadata.name }} — Sync Failed",
+          "title_link": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+          "fields": [{
+            "title": "Error",
+            "value": "{{.app.status.operationState.message}}",
+            "short": false
+          }]
+        }]
+
+  template.app-health-degraded: |
+    message: |
+      :warning: Application *{{.app.metadata.name}}* health is *Degraded*.
+    slack:
+      attachments: |
+        [{
+          "color": "#f4c030",
+          "title": "{{ .app.metadata.name }} — Health Degraded",
+          "title_link": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}"
+        }]
+
+  # ------------------------------------------------------------------ #
+  # Triggers                                                           #
+  # ------------------------------------------------------------------ #
+  trigger.on-deployed: |
+    - description: Application is synced and healthy
+      send: [app-deployed]
+      when: app.status.operationState.phase in ['Succeeded'] and app.status.health.status == 'Healthy'
+
+  trigger.on-sync-failed: |
+    - description: Application synced has failed
+      send: [app-sync-failed]
+      when: app.status.operationState.phase in ['Error', 'Failed']
+
+  trigger.on-health-degraded: |
+    - description: Application has degraded
+      send: [app-health-degraded]
+      when: app.status.health.status == 'Degraded'
+
+  # ------------------------------------------------------------------ #
+  # Default subscriptions (apply to all apps unless overridden)        #
+  # ------------------------------------------------------------------ #
+  defaultTriggers: |
+    - on-sync-failed
+    - on-health-degraded

@@ -1,0 +1,73 @@
+# Application: loki-prod
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: loki-prod
+    app.kubernetes.io/part-of: logging
+    environment: prod
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-critical
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: prod
+
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki-stack
+    # Pin to exact chart version in prod — no floating references
+    targetRevision: "2.10.2"
+    helm:
+      releaseName: loki
+      values: |
+        loki:
+          persistence:
+            enabled: true
+            size: 500Gi
+            storageClassName: gp3
+          config:
+            auth_enabled: false
+            limits_config:
+              retention_period: 2160h   # 90 days in prod
+              ingestion_rate_mb: 16
+              ingestion_burst_size_mb: 32
+            storage_config:
+              aws:
+                s3: s3://<REGION>/<LOKI_BUCKET>
+                s3forcepathstyle: false
+              boltdb_shipper:
+                active_index_directory: /loki/index
+                cache_location: /loki/cache
+                shared_store: s3
+          replication_factor: 3
+        promtail:
+          enabled: true
+          config:
+            clients:
+              - url: http://loki:3100/loki/api/v1/push
+        grafana:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: logging
+
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - Validate=true
+    retry:
+      limit: 2
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

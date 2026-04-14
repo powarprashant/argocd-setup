@@ -1,0 +1,44 @@
+# App-of-Apps: dev-apps
+#
+# This root application manages all other Application CRs in the dev
+# environment.  When ArgoCD syncs this Application it discovers and
+# reconciles every manifest under applications/dev/.
+#
+# Bootstrap sequence:
+#   1. Apply this manifest once manually (or via bootstrap.sh).
+#   2. ArgoCD takes over and self-manages all dev applications.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-apps
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: dev-apps
+    app.kubernetes.io/part-of: argocd-bootstrap
+    environment: dev
+  annotations:
+    # Notify on failures — the app-of-apps is the most critical app
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: dev
+
+  source:
+    repoURL: https://github.com/<YOUR_ORG>/argocd-setup
+    targetRevision: main
+    # ArgoCD scans every *.yaml in this directory for Application CRs
+    path: applications/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd       # Applications are created in the argocd namespace
+
+  syncPolicy:
+    automated:
+      prune: true       # Remove apps deleted from Git
+      selfHeal: true    # Re-create apps that are manually deleted
+    syncOptions:
+      - CreateNamespace=false   # argocd namespace must already exist
+      - ApplyOutOfSyncOnly=true

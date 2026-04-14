@@ -1,0 +1,90 @@
+# Kustomization for ArgoCD installation
+#
+# This pulls the official upstream install.yaml and layers our custom
+# ConfigMaps on top.  Using Kustomize keeps us idempotent and avoids
+# vendoring the full upstream manifest.
+#
+# Apply with:
+#   kubectl apply -k manifests/argocd/
+#
+# To pin a specific ArgoCD version, change the ?ref= query parameter.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  # Official ArgoCD HA install (swap for non-HA in non-prod)
+  # HA: https://raw.githubusercontent.com/argoproj/argo-cd/v2.11.0/manifests/ha/install.yaml
+  # Non-HA: https://raw.githubusercontent.com/argoproj/argo-cd/v2.11.0/manifests/install.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v2.11.0/manifests/ha/install.yaml
+  - namespace.yaml
+  - argocd-cm.yaml
+  - argocd-rbac-cm.yaml
+  - argocd-cmd-params-cm.yaml
+  - argocd-notifications-cm.yaml
+  - ingress.yaml
+
+# Patch the argocd-server Deployment to set resource limits
+# suitable for production EKS worker nodes.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: argocd-server
+        namespace: argocd
+      spec:
+        template:
+          spec:
+            containers:
+              - name: argocd-server
+                resources:
+                  requests:
+                    cpu: "250m"
+                    memory: "256Mi"
+                  limits:
+                    cpu: "500m"
+                    memory: "512Mi"
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: argocd-application-controller
+        namespace: argocd
+      spec:
+        template:
+          spec:
+            containers:
+              - name: argocd-application-controller
+                resources:
+                  requests:
+                    cpu: "250m"
+                    memory: "512Mi"
+                  limits:
+                    cpu: "1000m"
+                    memory: "1Gi"
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: argocd-repo-server
+        namespace: argocd
+      spec:
+        template:
+          spec:
+            containers:
+              - name: argocd-repo-server
+                resources:
+                  requests:
+                    cpu: "250m"
+                    memory: "256Mi"
+                  limits:
+                    cpu: "500m"
+                    memory: "512Mi"
+
+images:
+  - name: quay.io/argoproj/argocd
+    newTag: v2.11.0

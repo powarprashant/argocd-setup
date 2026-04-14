@@ -1,0 +1,39 @@
+# App-of-Apps: prod-apps
+#
+# No automated sync — new Application CRs must be manually synced
+# so a human reviews every addition to the prod environment.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-apps
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: prod-apps
+    app.kubernetes.io/part-of: argocd-bootstrap
+    environment: prod
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-critical
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: prod
+
+  source:
+    repoURL: https://github.com/<YOUR_ORG>/argocd-setup
+    # Pin to a release tag in prod — do not track main
+    targetRevision: v1.0.0
+    path: applications/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    # Deliberately NO automated sync in prod — drift alerts only
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - Validate=true

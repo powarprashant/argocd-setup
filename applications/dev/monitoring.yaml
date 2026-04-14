@@ -1,0 +1,85 @@
+# Application: monitoring-dev
+#
+# Deploys kube-prometheus-stack (Prometheus + Grafana + AlertManager)
+# from the monitoring-stack repo into the dev environment.
+#
+# Sync policy: fully automated with selfHeal + prune (safe in dev).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: monitoring-dev
+    app.kubernetes.io/part-of: monitoring
+    environment: dev
+  annotations:
+    # Notification subscriptions for this app
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-alerts
+  # Cascade delete: removing this Application CR also removes all K8s resources
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # ------------------------------------------------------------------ #
+  # Project binding                                                    #
+  # ------------------------------------------------------------------ #
+  project: dev
+
+  # ------------------------------------------------------------------ #
+  # Source — Helm chart from monitoring-stack repo                     #
+  # ------------------------------------------------------------------ #
+  source:
+    repoURL: https://github.com/<YOUR_ORG>/monitoring-stack
+    targetRevision: main          # In prod, pin to a tag/SHA
+    path: charts/kube-prometheus-stack/overlays/dev
+
+    # If consuming an upstream Helm chart directly:
+    # repoURL: https://prometheus-community.github.io/helm-charts
+    # chart: kube-prometheus-stack
+    # targetRevision: "58.5.3"
+    # helm:
+    #   releaseName: kube-prometheus-stack
+    #   valueFiles:
+    #     - values-dev.yaml
+
+  # ------------------------------------------------------------------ #
+  # Destination                                                        #
+  # ------------------------------------------------------------------ #
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring-dev
+
+  # ------------------------------------------------------------------ #
+  # Sync policy — automated in dev                                     #
+  # ------------------------------------------------------------------ #
+  syncPolicy:
+    automated:
+      prune: true           # Remove resources deleted from Git
+      selfHeal: true        # Revert out-of-band changes
+      allowEmpty: false     # Never sync an empty chart
+    syncOptions:
+      - CreateNamespace=true          # Auto-create monitoring-dev namespace
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true                # Prune after all resources are healthy
+      - ApplyOutOfSyncOnly=true       # Only apply changed resources
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # ------------------------------------------------------------------ #
+  # Ignore runtime-injected fields                                     #
+  # ------------------------------------------------------------------ #
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas   # HPA manages replicas at runtime
+    - group: ""
+      kind: Secret
+      jsonPointers:
+        - /data            # Ignore secrets managed externally (e.g., ESO)

@@ -1,0 +1,72 @@
+# Application: monitoring-prod
+#
+# PRODUCTION — critical differences from dev/staging:
+#   - automated.selfHeal: true  (prevent drift)
+#   - automated.prune: false    (human must approve prune operations)
+#   - No automated sync of new revisions — promotion is manual
+#   - targetRevision pinned to a Git tag, not a branch
+#
+# Promotion workflow:
+#   1. Jenkins updates the tag (e.g., v1.2.3) in a PR to this file.
+#   2. PR is reviewed and merged by a platform engineer.
+#   3. ArgoCD detects the new targetRevision and shows OutOfSync.
+#   4. Platform engineer manually triggers sync in the ArgoCD UI.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: monitoring-prod
+    app.kubernetes.io/part-of: monitoring
+    environment: prod
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-critical
+    notifications.argoproj.io/subscribe.on-deployed.slack: platform-releases
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: platform-critical
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: prod
+
+  source:
+    repoURL: https://github.com/<YOUR_ORG>/monitoring-stack
+    # Pin to an immutable Git tag — NEVER use 'main' in prod
+    targetRevision: v1.0.0
+    path: charts/kube-prometheus-stack/overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    # No automated sync of new versions — manual promotion required.
+    # selfHeal prevents out-of-band kubectl changes from persisting.
+    automated:
+      prune: false        # Manual prune — prevents accidental resource deletion
+      selfHeal: true      # Revert direct kubectl changes (drift prevention)
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+      - RespectIgnoreDifferences=true
+      - Validate=true     # Run server-side validation before applying
+    retry:
+      limit: 2            # Fewer retries in prod — alert fast on failure
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas   # HPA controls replicas
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/minReplicas
+        - /spec/maxReplicas

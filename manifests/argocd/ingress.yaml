@@ -1,0 +1,66 @@
+# ArgoCD Ingress — AWS ALB (Application Load Balancer)
+#
+# Prerequisites:
+#   1. AWS Load Balancer Controller installed in the cluster
+#      https://kubernetes-sigs.github.io/aws-load-balancer-controller/
+#   2. ACM certificate ARN for your domain
+#   3. Route53 / external-dns configured (or create A-record manually)
+#
+# The ALB terminates TLS; ArgoCD server runs with --insecure (set in
+# argocd-cmd-params-cm.yaml) so traffic inside the cluster is plain HTTP.
+#
+# For gRPC (CLI / API), a separate NLB Ingress or a grpc-specific rule
+# is recommended. This manifest covers the HTTPS UI path.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-server-ingress
+    app.kubernetes.io/part-of: argocd
+  annotations:
+    # ---------------------------------------------------------------- #
+    # AWS ALB Controller annotations                                   #
+    # ---------------------------------------------------------------- #
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing        # or: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+
+    # Replace with your ACM certificate ARN
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:<REGION>:<ACCOUNT_ID>:certificate/<CERT_ID>
+
+    # Enforce HTTPS
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+
+    # Health check
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/success-codes: "200"
+
+    # Tags propagated to the ALB resource
+    alb.ingress.kubernetes.io/tags: >-
+      Environment=production,
+      ManagedBy=argocd,
+      Team=platform
+
+    # WAF — attach an existing WebACL (optional but recommended)
+    # alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:<REGION>:<ACCOUNT_ID>:regional/webacl/<NAME>/<ID>
+
+    # ---------------------------------------------------------------- #
+    # IP allowlist — restrict UI to corporate CIDR (recommended)      #
+    # ---------------------------------------------------------------- #
+    # alb.ingress.kubernetes.io/inbound-cidrs: "10.0.0.0/8,203.0.113.0/24"
+spec:
+  rules:
+    - host: argocd.example.com   # <-- replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80

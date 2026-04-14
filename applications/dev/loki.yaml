@@ -1,0 +1,66 @@
+# Application: loki-dev
+#
+# Deploys Loki (log aggregation) into the dev environment.
+# Loki receives logs from Promtail/Fluent Bit DaemonSets.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: loki-dev
+    app.kubernetes.io/part-of: logging
+    environment: dev
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-alerts
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: dev
+
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki-stack
+    targetRevision: "2.10.2"
+    helm:
+      releaseName: loki
+      values: |
+        loki:
+          persistence:
+            enabled: true
+            size: 10Gi
+            storageClassName: gp3   # AWS EKS gp3 StorageClass
+          config:
+            auth_enabled: false
+            ingester:
+              chunk_idle_period: 3m
+              max_chunk_age: 1h
+            limits_config:
+              retention_period: 168h  # 7 days in dev
+        promtail:
+          enabled: true
+          config:
+            clients:
+              - url: http://loki:3100/loki/api/v1/push
+        grafana:
+          enabled: false  # Grafana is managed by kube-prometheus-stack
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: logging-dev
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

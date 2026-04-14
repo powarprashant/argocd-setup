@@ -1,0 +1,70 @@
+# ArgoCD RBAC ConfigMap
+# Defines role-based access control for the ArgoCD UI and API.
+# Reference: https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/
+#
+# Role hierarchy used here:
+#   role:admin      — full cluster-admin equivalent inside ArgoCD
+#   role:devops     — can sync/manage all apps, cannot delete AppProjects
+#   role:developer  — read-only on dev/staging, cannot touch prod
+#   role:readonly   — cluster-wide read-only (useful for auditors)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-rbac-cm
+    app.kubernetes.io/part-of: argocd
+data:
+  # Default policy for authenticated users who have no explicit mapping.
+  # Set to "" (empty) to deny by default — explicitly grant via group bindings.
+  policy.default: role:readonly
+
+  # CSV-style policy rules
+  # Format: p, <role/user/group>, <resource>, <action>, <object>, allow|deny
+  policy.csv: |
+    # ---------------------------------------------------------------- #
+    # Built-in admin role — map to your IdP admin group                #
+    # ---------------------------------------------------------------- #
+    g, <YOUR_ORG>:platform-admins, role:admin
+
+    # ---------------------------------------------------------------- #
+    # DevOps role — full sync/promote, no project mutations            #
+    # ---------------------------------------------------------------- #
+    p, role:devops, applications, get,    */*, allow
+    p, role:devops, applications, create, */*, allow
+    p, role:devops, applications, update, */*, allow
+    p, role:devops, applications, delete, */*, allow
+    p, role:devops, applications, sync,   */*, allow
+    p, role:devops, applications, action, */*, allow
+    p, role:devops, repositories, get,    *, allow
+    p, role:devops, repositories, create, *, allow
+    p, role:devops, repositories, update, *, allow
+    p, role:devops, clusters,     get,    *, allow
+    p, role:devops, logs,         get,    */*, allow
+    p, role:devops, exec,         create, */*, allow
+
+    g, <YOUR_ORG>:devops-team, role:devops
+
+    # ---------------------------------------------------------------- #
+    # Developer role — can sync dev/staging; read-only on prod         #
+    # ---------------------------------------------------------------- #
+    p, role:developer, applications, get,    dev/*, allow
+    p, role:developer, applications, sync,   dev/*, allow
+    p, role:developer, applications, get,    staging/*, allow
+    p, role:developer, applications, sync,   staging/*, allow
+    p, role:developer, applications, get,    prod/*, allow
+    p, role:developer, logs,         get,    dev/*, allow
+    p, role:developer, logs,         get,    staging/*, allow
+
+    g, <YOUR_ORG>:developers, role:developer
+
+    # ---------------------------------------------------------------- #
+    # Read-only role (default for authenticated users)                 #
+    # ---------------------------------------------------------------- #
+    p, role:readonly, applications, get, */*, allow
+    p, role:readonly, repositories, get, *,   allow
+    p, role:readonly, clusters,     get, *,   allow
+
+  # Use JWT sub as username, groups claim for group binding
+  scopes: "[groups, email]"
